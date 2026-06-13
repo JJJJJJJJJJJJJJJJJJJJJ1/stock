@@ -1,0 +1,95 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+
+# 1. 페이지 기본 설정
+st.set_page_config(
+    page_title="글로벌 IT 빅테크 주가 분석",
+    page_icon="📈",
+    layout="wide"
+)
+
+st.title("📈 글로벌 IT 기업 최근 1년 주가 분석 대시보드")
+st.markdown("삼성전자, SK하이닉스, 구글, 마이크로소프트(MS), 애플의 최근 1년 주가 변동 및 누적 수익률을 비교합니다.")
+
+# 2. 데이터 티커 및 기간 설정
+tickers = {
+    "삼성전자": "005930.KS",
+    "SK하이닉스": "000660.KS",
+    "구글 (Alphabet)": "GOOGL",
+    "마이크로소프트 (MS)": "MSFT",
+    "애플 (Apple)": "AAPL"
+}
+
+end_date = datetime.today()
+start_date = end_date - timedelta(days=365)
+
+# 3. 데이터 로드 및 캐싱 (속도 최적화)
+@st.cache_data(ttl=3600)  # 1시간 동안 캐시 유지
+def load_stock_data():
+    combined_df = pd.DataFrame()
+    for name, ticker in tickers.items():
+        # 최근 1년 종가(Close) 데이터 수집
+        df = yf.download(ticker, start=start_date, end=end_date)
+        if not df.empty:
+            # yfinance 최신 버전의 MultiIndex 또는 단일 컬럼 대응
+            if isinstance(df.columns, pd.MultiIndex):
+                combined_df[name] = df['Close'][ticker]
+            else:
+                combined_df[name] = df['Close']
+                
+    # 국가별 휴장일로 인한 결측치는 직전 데이터로 채움(Forward Fill)
+    combined_df = combined_df.ffill().bfill()
+    return combined_df
+
+with st.spinner("야후 파이낸스에서 실시간 데이터를 가져오는 중입니다..."):
+    try:
+        price_data = load_stock_data()
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        st.stop()
+
+# 4. 레이아웃 탭 구성
+tab1, tab2, tab3 = st.tabs(["📊 누적 수익률 비교", "💵 개별 주가 추이", "📋 데이터 요약"])
+
+# --- Tab 1: 누적 수익률 비교 (Plotly) ---
+with tab1:
+    st.subheader("기준일 대비 누적 수익률 (%) 비교")
+    st.caption("※ 통화(KRW/USD)와 주가 규모가 다르므로, 최근 1년 첫 거래일을 0%로 맞추어 변동률을 비교합니다.")
+    
+    # 첫 거래일 대비 누적 수익률 계산
+    normalized_data = (price_data / price_data.iloc[0] - 1) * 100
+    
+    # Plotly 인터랙티브 라인 차트 생성
+    fig1 = go.Figure()
+    for col in normalized_data.columns:
+        fig1.add_trace(go.Scatter(
+            x=normalized_data.index, 
+            y=normalized_data[col], 
+            mode='lines', 
+            name=col,
+            hovertemplate='%{x}<br>%{sidebar}: <b>%{y:.2f}%</b><extra></extra>'
+        ))
+        
+    fig1.update_layout(
+        hovermode="x unified",
+        xaxis_title="날짜",
+        yaxis_title="누적 수익률 (%)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=60, b=20),
+        height=550
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+
+# --- Tab 2: 개별 주가 추이 (Plotly) ---
+with tab2:
+    st.subheader("종목별 절대 주가 추이")
+    selected_stock = st.selectbox("분석할 종목을 선택하세요:", list(tickers.keys()))
+    
+    # 통화 표시 분기 처리
+    currency = "KRW (원)" if "KS" in tickers[selected_stock] else "USD ($)"
+    
+    # 레이아웃 분할 (그래프 / 메트릭 스탯)
+    col_chart, col_stat = st.columns(
